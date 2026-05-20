@@ -124,9 +124,9 @@ Temperature controls the degree of randomness in generation. For a closed-list c
 
 Before running the pipeline on the full dataset, test each component step by step.
 
-The following questions will follow the steps described below. 
+The following questions will follow the steps described below.
 
-![Steps for the Exercice 1](img/generation_workflow_exercice1.png) 
+![Steps for the Exercice 1](img/generation_workflow_exercice1.png)
 
 ::: {.callout-tip collapse="false" icon=false}
 ## `<i class="bi bi-book"></i>`{=html} Exercise 1: Test the pipeline on a single example
@@ -232,7 +232,7 @@ print(descriptions_retrieved[0])
 
 ---
 
-### Question 3 — Prompt construction
+### Prompt construction
 
 The quality of the prompt directly affects the LLM's output. A RAG prompt typically has two parts:
 
@@ -288,7 +288,7 @@ USER_PROMPT_TEMPLATE = """\
 
 ---
 
-### Question 4 — LLM inference
+### Question 3 — LLM inference
 
 Compile the prompt with the retrieved candidates and run inference. The steps are:
 
@@ -353,7 +353,6 @@ Next, let's use some synthetic data. We will:
 #| output: true
 
 import duckdb
-import pandas as pd
 
 con = duckdb.connect(database=":memory:")
 
@@ -666,19 +665,25 @@ n_retriever_miss = (~results["retriever_hit"]).sum()
 n_llm_miss       = (results["retriever_hit"] & ~results["pipeline_correct"]).sum()
 n_correct        = results["pipeline_correct"].sum()
 
-print("=" * 52)
-print("      DASHBOARD — RAG PIPELINE NACE 2.1")
-print("=" * 52)
-print(f"  Activities processed        : {n_total:>6}")
-print(f"  Correctly coded             : {n_correct:>6}  ({pipeline_accuracy:.1%})")
-print()
-print(f"  Retriever@{RETRIEVER_LIMIT} accuracy        : {retriever_accuracy:>6.1%}")
-print(f"  LLM accuracy (conditional)  : {llm_accuracy:>6.1%}")
-print(f"  Pipeline accuracy           : {pipeline_accuracy:>6.1%}")
-print()
-print(f"  Retriever errors            : {n_retriever_miss:>6}  ({n_retriever_miss/n_total:.1%})")
-print(f"  LLM errors                  : {n_llm_miss:>6}  ({n_llm_miss/n_total:.1%})")
-print("=" * 52)
+print(
+    "\n".join(
+        [
+            "=" * 52,
+            "      DASHBOARD — RAG PIPELINE NACE 2.1",
+            "=" * 52,
+            f"  Activities processed        : {n_total:>6}",
+            f"  Correctly coded             : {n_correct:>6}  ({pipeline_accuracy:.1%})",
+            "",
+            f"  Retriever@{RETRIEVER_LIMIT} accuracy        : {retriever_accuracy:>6.1%}",
+            f"  LLM accuracy (conditional)  : {llm_accuracy:>6.1%}",
+            f"  Pipeline accuracy           : {pipeline_accuracy:>6.1%}",
+            "",
+            f"  Retriever errors            : {n_retriever_miss:>6}  ({n_retriever_miss / n_total:.1%})",
+            f"  LLM errors                  : {n_llm_miss:>6}  ({n_llm_miss / n_total:.1%})",
+            "=" * 52,
+        ]
+    )
+)
 ```
 
 ::: {.callout-note}
@@ -778,4 +783,162 @@ display(p2)
 
 ::: {.callout-note}
 **Precision / coverage trade-off:** raising the confidence threshold increases precision (the retained predictions are more likely to be correct) but reduces coverage (fewer labels are automatically coded, the rest requiring manual review). Choosing the right threshold depends on the operational constraints of your use case.
+:::
+
+
+::: {.callout-tip title="Using Polars"}
+
+You can try avoid using lists and use Polars package instead to do all of the previous steps.
+
+Here is an example for the retrieval step, to search for NACE candidates using Polars's usefull `.unnest()` method.
+
+``` python
+points_df = (
+    pl.DataFrame(points.model_dump())
+    .unnest()
+    .unnest()
+    .select(["id", "score", "code", "text"])
+)
+
+```
+
+You can also use Polars in the full pipeline, although it raises some question if you want to put it in production.
+
+``` python
+def run_rag_pipeline(activity: str) -> dict:
+    """
+    Run the full RAG pipeline for a single activity label.
+
+    Parameters
+    ----------
+    activity : str
+        Free-text economic activity label to be coded.
+
+    Returns
+    -------
+    dict with keys:
+        - nace_code (str | None) : predicted NACE code
+        - codable (bool)        : True if the label could be coded
+        - confidence (float)    : confidence score (0–1)
+        - retrieved_codes (list): candidates returned by the retriever
+    """
+    # --- Step 1: Embedding ---
+    emb_response = client_llmlab.embeddings.create(model=EMB_MODEL_NAME, input=activity)
+    embedding = emb_response.data[0].embedding
+
+    # --- Step 2: Retrieval ---
+    points = client_qdrant.query_points(
+        collection_name=COLLECTION_NAME,
+        query=embedding,
+        limit=RETRIEVER_LIMIT,
+    )
+
+    points_df = (
+        pl.DataFrame(points.model_dump(), schema_overrides={"points": pl.Struct})
+        .unnest()
+        .unnest()
+        .select(["id", "score", "code", "text"])
+    )
+
+    # --- Step 3: Prompt construction ---
+    user_prompt = USER_PROMPT_TEMPLATE.format(
+        activity=activity,
+        proposed_nace_descriptions="## " + "\n\n## ".join(points_df["text"]),
+        proposed_nace_codes=", ".join(points_df["code"]),
+    )
+
+    # --- Step 4: LLM inference ---
+    gen_response = client_llmlab.chat.completions.create(
+        model=GEN_MODEL_NAME,
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt},
+        ],
+        temperature=TEMPERATURE,
+        response_format={"type": "json_object"},
+    )
+
+    result = json.loads(gen_response.choices[0].message.content)
+    # Keep retrieved candidates for retriever evaluation
+    result["retrieved_codes"] = points_df["code"]
+
+    return result
+
+
+annotations_df = pl.DataFrame(annotations)
+
+results_df = annotations_df.with_columns(
+    pl.col("label")
+    .map_elements(
+        lambda a: run_rag_pipeline(a),
+        return_dtype=pl.Struct(
+            {
+                "nace_code": pl.Utf8,
+                "codable": pl.Boolean,
+                "confidence": pl.Float64,
+                "retrieved_codes": pl.List(pl.Utf8),
+            }
+        ),
+    )
+    .alias("pred")
+).unnest()
+
+# Metrics
+results_df = (
+    results_df.with_columns(
+        retriever_hit=pl.col("code").is_in(pl.col("retrieved_codes")),
+        pipeline_correct=pl.col("code") == pl.col("nace_code"),
+    )
+    .with_columns(
+        pipeline_correct=pl.col("pipeline_correct").fill_null(
+            False  # if no prediction - pipeline is false
+        )
+    )
+    .with_columns(
+        llm_correct_given_retriever=pl.when(pl.col("retriever_hit"))
+        .then(pl.col("pipeline_correct"))
+        .otherwise(None),
+    )
+)
+
+# Q1
+results_df["retriever_hit"].value_counts()
+retriever_accuracy = results_df["retriever_hit"].mean()
+
+# Q2
+results_df["llm_correct_given_retriever"].value_counts()
+results_df.filter(pl.col("retriever_hit"))["llm_correct_given_retriever"].value_counts()
+llm_accuracy = results_df.filter(pl.col("retriever_hit"))[
+    "llm_correct_given_retriever"
+].mean()
+
+# Q3
+results_df["pipeline_correct"].value_counts()
+pipeline_accuracy = results_df["pipeline_correct"].mean()
+pipeline_accuracy
+llm_accuracy * retriever_accuracy
+
+# Q4
+n_total = len(results_df)
+
+n_retriever_miss = (
+    results_df["retriever_hit"]
+    .value_counts()
+    .filter(~pl.col("retriever_hit"))["count"][0]
+)
+n_llm_miss = (
+    results_df["llm_correct_given_retriever"]
+    .value_counts()
+    .filter(~pl.col("llm_correct_given_retriever"))["count"][0]
+)
+
+n_correct = (
+    results_df["pipeline_correct"]
+    .value_counts()
+    .filter(pl.col("pipeline_correct"))["count"][0]
+)
+
+```
+
+
 :::
