@@ -49,15 +49,42 @@ flowchart LR
 
 ## Before you start
 
-Make sure your environment is ready:
+Three things need to be in place before running any cell.
 
-- **Packages**: all dependencies are declared in `pyproject.toml`. Run `uv sync` to install them.
-- **Environment variables**: create a `.env` file at the root of the project with the following variables:
-  ```
-  MLFLOW_TRACKING_URI=<add the MLflow server URL>
-  MLFLOW_RUN_ID=<add the run ID>
-  ```
-- **torchtextclassifiers**: this notebook relies on the [`torchtextclassifiers`](https://github.com/InseeFrLab/torchTextClassifiers) library developped by Insee. The full API documentation is available [here](https://inseefrlab.github.io/torchTextClassifiers/).
+**1. Install the dependencies**
+
+All required packages are listed in `pyproject.toml`. Run the following command once at the root of the project to install them into a virtual environment:
+
+```bash
+uv sync
+```
+
+This installs, among others, `torchTextClassifiers` — the INSEE library that provides the tokenizer, model, and training loop used throughout this notebook. Its full API documentation is available [here](https://inseefrlab.github.io/torchTextClassifiers/).
+
+**2. Understand what MLflow is and why we need it**
+
+[MLflow](https://mlflow.org/) is an open-source platform for tracking machine learning experiments. Every time a model is trained, MLflow records the hyperparameters used, the metrics obtained (loss, accuracy…), and the model artefacts (weights, tokenizer, configuration). This makes it easy to compare runs, reproduce results, and share trained models with others.
+
+In this notebook, we use MLflow in two ways:
+
+- During training (Exercise 4), metrics are logged to a remote MLflow server so you can monitor progress.
+- After training (Exercise 4, Question 3), we **download a pretrained model** that was already trained on the full dataset and stored in MLflow, so you do not have to wait hours for training to complete.
+
+**3. Set up your credentials**
+
+Because the MLflow server is a remote, access-controlled service, you need to provide two pieces of information:
+
+- `MLFLOW_TRACKING_URI`: the URL of the MLflow server (tells your code where to connect).
+- `MLFLOW_RUN_ID`: the identifier of the specific training run whose artefacts (pretrained model) you want to download.
+
+These values must **not** be hardcoded in the notebook — storing credentials in source code is a security risk. Instead, create a file named `.env` at the root of the project and fill it in as follows:
+
+```
+MLFLOW_TRACKING_URI=<add the MLflow server URL>
+MLFLOW_RUN_ID=<add the run ID>
+```
+
+The notebook loads this file automatically at startup with `load_dotenv()`, making the values available as environment variables without ever appearing in the code.
 
 ---
 
