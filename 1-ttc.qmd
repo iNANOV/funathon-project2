@@ -221,11 +221,11 @@ print(f"Train: {len(train_df)} | Val: {len(val_df)} | Test: {len(test_df)}")
 
 The `code` column contains strings like `"47.11A"` (codes from the NACE classification). Neural networks do not understand strings and require integer targets (1, 2, 3...), so we need to map each unique NACE code to an integer index. To do that, you will use an encoder.
 
-Use `LabelEncoder` from `sklearn.preprocessing` (see [here](https://scikit-learn.org/stable/modules/generated/sklearn.preprocessing.LabelEncoder.html) for the documentation). Call `.fit()` on all codes, then `.transform()` on each split. Extract numpy arrays with `.to_numpy()`.
+Use `LabelEncoder` from `sklearn.preprocessing` (see [here](https://scikit-learn.org/stable/modules/generated/sklearn.preprocessing.LabelEncoder.html) for the documentation). Call `.fit()` on the `code` column of your training dataframe (after having converted it to a numpy array with `.to_numpy()`).
 
 ::: {.callout-note appearance="simple" collapse="true"}
 ## Why do we use LabelEncoder ?
-We use `LabelEncoder` to map the categorical target `y` to integers `0, 1, …, n_classes - 1`, the format expected by scikit-learn classifiers. It should not be used on input features, however: for those, `OrdinalEncoder` or `OneHotEncoder` is preferred, because `LabelEncoder` is designed for a 1D target and does not handle unseen categories at inference time.
+We use `LabelEncoder` to map the categorical target `y` to integers `0, 1, …, n_classes - 1`, the format expected by scikit-learn classifiers.
 :::
 
 ::: {.callout-warning collapse="false"}
@@ -261,11 +261,16 @@ else:
     print(f"OK — all {len(all_codes)} codes appear in the training set.")
 ```
 
-## Question 3 — Prepare the labels to use them wityh `ttc`
+## Question 3 — Prepare the labels to use them with `ttc`
 
-``torchTextClassifiers`` provides the ``ValueEncoder`` object to deal with textual labels. You simply need to feed the fitted `LabelEncoder` to the ``ValueEncoder``.
+``torchTextClassifiers`` requires labels to be wrapped in a ``ValueEncoder`` object. This is straightforward: you just pass your already-fitted `LabelEncoder` to the ``ValueEncoder`` constructor.
 
-Create a `ValueEncoder` ..... TO BE COMLETED BY MEILAME
+Import the `ValueEncoder` class from the ``torchTextClassifiers.value_encoder`` subpackage, then create a `value_encoder` object by passing your fitted `label_encoder` as an argument.
+
+::: {.callout-note appearance="simple" collapse="true"}
+## Why wrap the LabelEncoder in a ValueEncoder?
+While `LabelEncoder` plays the role of the "converter" from string labels to integers, working with raw integers at prediction time can be cumbersome — you have to manually map predictions back to their original label names. The ``ValueEncoder`` solves this by integrating tightly with the `torchTextClassifiers` ecosystem: when you pass it to a model, predictions are automatically returned as human-readable labels rather than integers. As a bonus, ``ValueEncoder`` also supports additional categorical input features — advanced readers can find examples [here](https://inseefrlab.github.io/torchTextClassifiers/tutorials/mixed_features.html).
+:::
 
 ```{python}
 #| label: value-encoder
@@ -327,8 +332,7 @@ Because the vocabulary is learned from your data, it naturally adapts to domain-
 
 ## Question 1 — Train the tokenizer and inspect a sample
 
-You are going to use a `WordPieceTokenizer` from the `torchTextClassifiers` package (see the [documentation](https://inseefrlab.github.io/torchTextClassifiers/api/tokenizers.html)). Train a `WordPieceTokenizer` from scratch on the training labels with `vocab_size=5000`
-and `output_dim=10`. Use the fitted tokenizer to tokenize one observations (with the `tokenize` method), and inspect the result to understand how the text is split.
+You are going to use a `WordPieceTokenizer` from the `torchTextClassifiers` package (see the [documentation](https://inseefrlab.github.io/torchTextClassifiers/api/tokenizers.html)). Train a `WordPieceTokenizer` from scratch on the training labels with `vocab_size=5000` and `output_dim=10`. Use the fitted tokenizer to tokenize one observations (with the `tokenize` method), and inspect the result to understand how the text is split.
 
 <details>
 <summary>Clue here</summary>
@@ -374,24 +378,46 @@ print(
 
 # Model architecture
 
-A text classification model in `torchTextClassifiers` is built from three components:
+A text classification model in `torchTextClassifiers` is built from three components (on top of the ``ValueEncoder`` and the tokenizer seen above):
 
 1. [**TextEmbedder**](https://inseefrlab.github.io/torchTextClassifiers/architecture/overview.html#component-2-text-embedding-pipeline-tokenembedder-sentenceembedder): converts token IDs into dense vectors (*embeddings*) of size `embedding_dim`.
-   A self-attention layer can be added to capture word order and context.
+
+::: {.callout-note appearance="simple" collapse="true"}
+## Embeddings, a key concept in NLP models
+
+**The problem:** computers can't work with words directly — they need numbers. A naive solution is to assign each word a unique integer (its *token ID*). But this is useless for learning: the number `2345` tells the model nothing about what "cat" *means*, and gives no hint that "cat" and "kitten" should be treated similarly.
+
+**The idea:** instead of a single integer, represent each token as a **dense vector** — a list of, say, 768 floating-point numbers. This vector is the word's **embedding**: its coordinates in a high-dimensional "semantic space".
+
+![From raw text to a dense vector](img/embedding_pipeline.svg){width=100%}
+
+**Where do these numbers come from?** The embedding vectors are **learned parameters** of the model, initialised randomly and updated during training just like any other weight. The training signal pushes the model to give similar vectors to words that behave similarly in context. After training, words with related meanings end up close together in embedding space.
+
+![Words projected into a 2D embedding space — similar concepts cluster together](img/embedding_space.svg){width=100%}
+
+**A memorable analogy:** think of each word as a point on a map. Cities in the same country end up near each other; animals cluster together; food words form their own neighbourhood. The "distance" between two points reflects how semantically related the words are. This is why you can do things like:
+
+$$\text{vec}(\textit{king}) - \text{vec}(\textit{man}) + \text{vec}(\textit{woman}) \approx \text{vec}(\textit{queen})$$
+
+The geometry of the space encodes meaning.
+
+**In `torchTextClassifiers`:** the `TextEmbedder` component takes a sequence of token IDs and looks up each one in a learnable *embedding matrix* (of shape `vocab_size × embedding_dim`), producing a sequence of dense vectors that the rest of the network can reason about.
+:::
 
 2. [**CategoricalVariableNet**](https://inseefrlab.github.io/torchTextClassifiers/architecture/overview.html#component-3-categorical-variable-handler) *(optional)*: encodes additional categorical features and merges
-   them with the text representation. **Not used in this dataset.**
+   them with the text representation. **Not used here.**
 
-3. [**ClassificationHead**](https://inseefrlab.github.io/torchTextClassifiers/architecture/overview.html#component-4-classification-head): projects the final representation onto `num_classes` dimensions.
-   The highest value determines the predicted class.
+3. [**ClassificationHead**](https://inseefrlab.github.io/torchTextClassifiers/architecture/overview.html#component-4-classification-head): projects the final representation onto `num_classes` dimensions. The highest value determines the predicted class.
 
-![torchTextClassifier architecture overview](img/ttc_architecture.png)
+**To learn more about the building blocks of the torchTextClassifiers package, please visit the [documentation](https://inseefrlab.github.io/torchTextClassifiers/architecture/index.html).**
 
 These are configured through `ModelConfig` and assembled automatically by `torchTextClassifiers`. You can see some `ModelConfig` examples [here](https://inseefrlab.github.io/torchTextClassifiers/architecture/overview.html#usage-examples) and for `torchTextClassifiers` [here](https://inseefrlab.github.io/torchTextClassifiers/api/wrapper.html)
 
 # Training
 
-Training a neural network means finding the weights that minimise a **loss function** — a measure of how wrong the model's predictions are. At each step, the model makes predictions on a **mini-batch** of examples, computes the loss, and updates the weights in the direction that reduces it (via **gradient descent**).
+Training a neural network means finding the weights that minimise a **loss function** — a measure of how wrong the model's predictions are. At each step, the model makes predictions on a **mini-batch** of examples, computes the loss, and updates the weights in the direction that reduces it (via an optimization algorithm called the **stochastic gradient descent**).
+
+![The training loop](img/training_loop.svg){width=100%}
 
 Key training hyperparameters:
 
