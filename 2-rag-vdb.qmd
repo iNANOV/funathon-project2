@@ -134,6 +134,28 @@ for collection in collections.collections:
 
 
 
+```{python}
+#| label: client_qdrant
+#| code-fold: true
+#| code-summary: Click to see the answer
+#| code-overflow: scroll
+
+from qdrant_client import QdrantClient
+
+url=os.environ["QDRANT_URL"]
+api_key=os.environ["QDRANT_API_KEY"]
+port=os.environ["QDRANT_API_PORT"]
+
+print(url)
+print(api_key)
+print(port)
+
+base_url=os.environ["LLMLAB_URL"]
+api_key=os.environ["LLMLAB_API_KEY"]
+
+print(base_url)
+```
+:::
 
 # Get and process NACE data
 
